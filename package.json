@@ -1,6 +1,6 @@
 {
   "name": "otzaria-plugins-offline",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "חנות תוספים לאוצריא - גרסה אופליין למחשב (Windows)",
   "main": "main.js",
   "author": "Otzaria",
@@ -18,6 +18,8 @@
     "appId": "org.otzaria.pluginsoffline",
     "productName": "חנות תוספים לאוצריא - אופליין",
     "asar": true,
+    "compression": "maximum",
+    "afterPack": "build/afterPack.js",
     "files": [
       "main.js",
       "preload.js",
@@ -45,6 +47,9 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
+    },
+    "portable": {
+      "artifactName": "otzaria-plugins-store-${version}-portable.${ext}"
     },
     "directories": {
       "output": "dist-build",
