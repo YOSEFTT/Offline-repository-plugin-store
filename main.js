@@ -1,24 +1,17 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
-const path = require('path');
-const fs = require('fs');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
+const path = require('path')
+const fs = require('fs')
 const fsp = fs.promises
+const AdmZip = require('adm-zip')
 
 // כתובת האתר החי של אוצריא, ממנו שואבים את רשימת התוספים
 const BASE_URL = 'https://otzaria.org'
 
-// --- שלב 1: הגדרת נתיב ריצה נייד (Portable) ---
-// נבדוק אם אנחנו מריצים קובץ מקומפל (EXE) או נמצאים במצב פיתוח
-const baseDir = app.isPackaged 
-  ? path.dirname(app.getPath('exe')) // תיקיית ה-EXE של המשתמש
-  : app.getAppPath();                 // תיקיית השורש של הפרויקט בפיתוח
+// תיקיית האפליקציה עצמה: ליד קובץ ה-exe כשהאפליקציה ארוזה (portable), או תיקיית הפרויקט בזמן פיתוח
+const APP_DIR = app.isPackaged ? path.dirname(process.execPath) : __dirname
 
-// נגדיר ל-Electron להשתמש בתיקייה מקומית בשם app-data
-app.setPath('userData', path.join(baseDir, 'app-data'));
-
-
-// --- שלב 2: הגדרת תיקיות הנתונים (הקוד המקורי שלך שעובד כעת מול הנתיב החדש) ---
-// תיקיית הנתונים המקומית תיווצר כעת בתוך app-data/plugins-store-data צמוד לפרויקט!
-const DATA_DIR = path.join(app.getPath('userData'), 'plugins-store-data')
+// תיקיית הנתונים המקומית - צמודה לתיקיית האפליקציה עצמה, כדי שהעתקת התיקייה (למשל לדיסק-און-קי) תעביר גם את הנתונים
+const DATA_DIR = path.join(APP_DIR, 'plugins-store-data')
 const FILES_DIR = path.join(DATA_DIR, 'files')
 const DB_PATH = path.join(DATA_DIR, 'db.json')
 
@@ -97,6 +90,22 @@ async function downloadToFile(url, destPathNoExt, { preferredExt } = {}) {
   return { ext, size: buf.length, originalName, path: destPath }
 }
 
+// ---- חילוץ ה-id האמיתי מתוך manifest.json שבתוך קובץ ה-.otzplugin עצמו ----
+// שדה ה-id שה-API הציבורי של האתר מחזיר הוא מזהה מסד-הנתונים של האתר, ולא ה-id
+// שאוצריא בפועל משתמשת בו לתיקיית ההתקנה אצל המשתמש (installed/<manifestId>).
+// לכן חייבים לחלץ אותו ישירות מתוך קובץ התוסף שכבר יש לנו מקומית.
+function readManifestIdFromPluginFile(filePath) {
+  try {
+    const zip = new AdmZip(filePath)
+    const entry = zip.getEntry('manifest.json')
+    if (!entry) return null
+    const manifest = JSON.parse(entry.getData().toString('utf-8'))
+    return typeof manifest.id === 'string' && manifest.id.trim() ? manifest.id.trim() : null
+  } catch {
+    return null // קובץ פגום/לא ZIP תקין - פשוט מתעלמים, ההתאמה למותקן פשוט לא תעבוד לתוסף הזה
+  }
+}
+
 // ---- לוגיקת סנכרון ----
 
 async function syncNow(sender) {
@@ -153,7 +162,8 @@ async function syncNow(sender) {
       remoteDownloadUrl: `${BASE_URL}${rp.downloadUrl}`,
       image: existing?.image || null,
       screenshots: existing?.screenshots || [],
-      localFile: existing?.localFile || null
+      localFile: existing?.localFile || null,
+      manifestId: existing?.manifestId || null
     }
 
     // התמונה וצילומי המסך קטנים ומתעדכנים בכל סנכרון
@@ -196,9 +206,13 @@ async function syncNow(sender) {
           ext: fileResult.ext,
           size: fileResult.size
         }
+        localPlugin.manifestId = readManifestIdFromPluginFile(fileResult.path)
       } catch (err) {
         send({ phase: 'warning', message: `לא ניתן להוריד את קובץ התוסף ${rp.name}: ${err.message}` })
       }
+    } else if (!localPlugin.manifestId && localPlugin.localFile) {
+      // תוסף שכבר סונכרן בעבר (לפני שהתוספת הזו נכתבה) - נחלץ את ה-manifestId מהקובץ הקיים בלי להוריד מחדש
+      localPlugin.manifestId = readManifestIdFromPluginFile(path.join(DATA_DIR, localPlugin.localFile.path))
     }
 
     newPlugins.push(localPlugin)
@@ -210,6 +224,39 @@ async function syncNow(sender) {
 
   send({ phase: 'done', total, message: 'הסנכרון הושלם' })
   return { total, lastSync: db.lastSync }
+}
+
+// ---- זיהוי תוספים המותקנים כבר באוצריא ----
+
+// אוצריא שומרת כל תוסף מותקן בתיקייה משלו, ובתוכה תת-תיקיית current/manifest.json עם הגרסה המותקנת:
+// %APPDATA%/otzaria/plugins/installed/<plugin-id>/current/manifest.json
+const OTZARIA_INSTALLED_DIR = path.join(app.getPath('appData'), 'otzaria', 'plugins', 'installed')
+
+function readInstalledManifest(pluginId) {
+  const manifestPath = path.join(OTZARIA_INSTALLED_DIR, pluginId, 'current', 'manifest.json')
+  try {
+    const raw = fs.readFileSync(manifestPath, 'utf-8')
+    const manifest = JSON.parse(raw)
+    return manifest.version || null
+  } catch {
+    return null // אין מניפסט תקין - מתעלמים בשקט מהתוסף הזה
+  }
+}
+
+function scanInstalledPlugins() {
+  const result = {}
+  let entries
+  try {
+    entries = fs.readdirSync(OTZARIA_INSTALLED_DIR, { withFileTypes: true })
+  } catch {
+    return result // אוצריא לא מותקנת, או שאין עדיין תוספים מותקנים
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const version = readInstalledManifest(entry.name)
+    if (version) result[entry.name] = version
+  }
+  return result
 }
 
 // ---- עזרי הגשת נתיבים מקומיים לחלון (file://) ----
@@ -248,6 +295,10 @@ ipcMain.handle('get-plugin', (_event, id) => {
 
 ipcMain.handle('sync-now', async (event) => {
   return syncNow(event.sender)
+})
+
+ipcMain.handle('get-installed-plugins', () => {
+  return scanInstalledPlugins()
 })
 
 ipcMain.handle('download-plugin', async (_event, id) => {

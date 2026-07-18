@@ -11,7 +11,7 @@
     "dist:win-portable": "electron-builder --win portable --x64"
   },
   "devDependencies": {
-    "electron": "^33.4.11",
+    "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   },
   "build": {
@@ -50,5 +50,8 @@
       "output": "dist-build",
       "buildResources": "assets"
     }
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.0"
   }
 }
