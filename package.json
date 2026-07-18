@@ -46,6 +46,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
     },
+    "portable": {
+      "artifactName": "otzaria-plugins-store-${version}-portable.${ext}"
+    },
     "directories": {
       "output": "dist-build",
       "buildResources": "assets"
