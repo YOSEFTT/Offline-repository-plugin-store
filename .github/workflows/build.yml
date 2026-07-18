@@ -1,58 +1,24 @@
 name: Build & Release
 
-# רץ אוטומטית בכל פוש (בדיקת בנייה + קובץ נייד להורדה),
-# ובכל פרסום Release מקדם אוטומטית את גרסת התוכנה, בונה ומצרף EXE נייד יחיד.
+# בכל פוש ל-main:
+#   1. מקדם אוטומטית את גרסת הפאטצ' (1.0.1 -> 1.0.2)
+#   2. בונה קובץ EXE נייד יחיד (Portable, ללא התקנה) - בנייה אחת בלבד
+#   3. מבצע commit של הגרסה החדשה חזרה ל-main
+#   4. יוצר Release אוטומטי ומצרף אליו את ה-EXE
 on:
   push:
-    branches:
-      - '**'   # כל ענף (לא כולל תגים, כדי למנוע בנייה כפולה בעת יצירת Release)
-  release:
-    types: [published]
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
-  # ---------------------------------------------------------------
-  # בנייה בכל פוש: מוודא שהאפליקציה נבנית, ושומר EXE נייד כ-Artifact
-  # ---------------------------------------------------------------
-  ci-build:
-    if: github.event_name == 'push'
+  release:
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build portable EXE
-        run: npm run dist:win-portable
-
-      - name: Upload portable EXE artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: otzaria-plugins-store-portable
-          path: dist-build/*.exe
-          if-no-files-found: error
-
-  # ---------------------------------------------------------------
-  # בפרסום Release: קידום פאטצ' אוטומטי -> בנייה -> צירוף EXE לרילס
-  # ---------------------------------------------------------------
-  release-build:
-    if: github.event_name == 'release'
-    runs-on: windows-latest
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
@@ -68,9 +34,9 @@ jobs:
         id: bump
         shell: bash
         run: |
-          new_version=$(npm version patch --no-git-tag-version)
-          echo "version=${new_version}" >> "$GITHUB_OUTPUT"
-          echo "Bumped to ${new_version}"
+          version=$(npm version patch --no-git-tag-version)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "New version: ${version}"
 
       - name: Build portable EXE
         run: npm run dist:win-portable
@@ -81,12 +47,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
-          git push origin main
+          git commit -m "chore: release ${{ steps.bump.outputs.version }} [skip ci]"
+          git push origin HEAD:main
 
-      - name: Attach portable EXE to release
+      - name: Create GitHub Release with portable EXE
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" dist-build/*.exe --clobber
+          gh release create "${{ steps.bump.outputs.version }}" dist-build/*.exe \
+            --target main \
+            --title "${{ steps.bump.outputs.version }}" \
+            --notes "בנייה אוטומטית — קובץ EXE נייד (Portable), אינו מצריך התקנה."
